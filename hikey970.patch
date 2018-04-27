@@ -1,0 +1,1705 @@
+From 2200febd33291206359741c025e2ed7682577ffc Mon Sep 17 00:00:00 2001
+From: alik <15895994695@163.com>
+Date: Sat, 17 Mar 2018 07:40:31 -0700
+Subject: [PATCH] support debian
+
+---
+ arch/arm64/boot/dts/hisilicon/kirin970-drm.dtsi    |   1 +
+ .../arm64/boot/dts/hisilicon/kirin970-hikey970.dts |   7 +
+ arch/arm64/configs/hikey970_defconfig              |  16 +-
+ drivers/gpu/drm/drm_atomic.c                       |  15 +-
+ drivers/gpu/drm/drm_atomic_helper.c                |  27 ++-
+ drivers/gpu/drm/drm_connector.c                    |   1 +
+ drivers/gpu/drm/drm_drv.c                          |   2 +-
+ drivers/gpu/drm/drm_encoder.c                      |   2 +-
+ drivers/gpu/drm/drm_fb_cma_helper.c                | 186 ++++++++++++++++++++-
+ drivers/gpu/drm/drm_fb_helper.c                    |  54 ++++--
+ drivers/gpu/drm/drm_gem_cma_helper.c               |   3 +-
+ drivers/gpu/drm/drm_irq.c                          |   8 +-
+ drivers/gpu/drm/drm_probe_helper.c                 |   4 +-
+ drivers/gpu/drm/hisilicon/kirin/kirin_drm_drv.c    |   4 +-
+ drivers/gpu/drm/hisilicon/kirin960/dw_drm_dsi.c    |  15 +-
+ drivers/gpu/drm/hisilicon/kirin960/hdmi/adv7535.c  |  78 +++++++--
+ .../drm/hisilicon/kirin960/kirin_drm_dpe_utils.c   |  18 +-
+ .../drm/hisilicon/kirin960/kirin_drm_dpe_utils.h   |   2 +-
+ drivers/gpu/drm/hisilicon/kirin960/kirin_drm_drv.c |  37 +++-
+ drivers/gpu/drm/hisilicon/kirin960/kirin_drm_drv.h |   6 +-
+ drivers/gpu/drm/hisilicon/kirin960/kirin_drm_dss.c |   3 +
+ .../hisilicon/kirin960/kirin_drm_overlay_utils.c   |  28 ++--
+ drivers/gpu/drm/hisilicon/kirin960/kirin_fbdev.c   |   4 +-
+ drivers/video/console/fbcon.c                      |  12 ++
+ drivers/video/fbdev/core/fbmem.c                   |  37 +++-
+ 25 files changed, 475 insertions(+), 95 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/hisilicon/kirin970-drm.dtsi b/arch/arm64/boot/dts/hisilicon/kirin970-drm.dtsi
+index d2c47aa..44bf2ef 100755
+--- a/arch/arm64/boot/dts/hisilicon/kirin970-drm.dtsi
++++ b/arch/arm64/boot/dts/hisilicon/kirin970-drm.dtsi
+@@ -1,6 +1,7 @@
+ /{
+ 		dpe: dpe@E8600000 {
+ 			compatible = "hisilicon,kirin970-dpe";
++			memory-region = <&drm_dma_reserved>;
+ 			status = "ok";
+ 			dss_version_tag = <0x40>;
+ 			// DSS, PERI_CRG, SCTRL, PCTRL, NOC_DSS_Service_Target, PMCTRL, MEDIA_CRG
+diff --git a/arch/arm64/boot/dts/hisilicon/kirin970-hikey970.dts b/arch/arm64/boot/dts/hisilicon/kirin970-hikey970.dts
+index b350ed5..c03f719 100755
+--- a/arch/arm64/boot/dts/hisilicon/kirin970-hikey970.dts
++++ b/arch/arm64/boot/dts/hisilicon/kirin970-hikey970.dts
+@@ -66,6 +66,13 @@
+ 			no-map;
+ 		};
+ 
++    drm_dma_reserved: drm_dma_mem_region {
++    compatible = "shared-dma-pool";
++    reg = <0 0x32200000 0 0x8000000>;
++    alignment = <0x400000>;
++    no-map;
++    };
++
+ 		hifi-base {
+ 			reg = <0x0 0x8D500000 0x0 0xC00000>;
+ 			no-map;
+diff --git a/arch/arm64/configs/hikey970_defconfig b/arch/arm64/configs/hikey970_defconfig
+index c77d7ca..fd7cc78 100644
+--- a/arch/arm64/configs/hikey970_defconfig
++++ b/arch/arm64/configs/hikey970_defconfig
+@@ -1,5 +1,6 @@
+ CONFIG_POSIX_MQUEUE=y
+-# CONFIG_FHANDLE is not set
++CONFIG_FHANDLE=y
++CONFIG_ANDROID_PARANOID_NETWORK=n
+ CONFIG_AUDIT=y
+ CONFIG_NO_HZ=y
+ CONFIG_HIGH_RES_TIMERS=y
+@@ -12,7 +13,7 @@ CONFIG_TASK_XACCT=y
+ CONFIG_TASK_IO_ACCOUNTING=y
+ CONFIG_IKCONFIG=y
+ CONFIG_IKCONFIG_PROC=y
+-CONFIG_LOG_BUF_SHIFT=14
++CONFIG_LOG_BUF_SHIFT=100
+ CONFIG_CGROUP_FREEZER=y
+ CONFIG_CGROUP_PIDS=y
+ CONFIG_CGROUP_DEVICE=y
+@@ -350,7 +351,11 @@ CONFIG_INPUT_GPIO=y
+ CONFIG_INPUT_HISI_POWERKEY=y
+ # CONFIG_SERIO_SERPORT is not set
+ CONFIG_SERIO_AMBAKMI=y
+-# CONFIG_VT is not set
++CONFIG_VT=y
++CONFIG_TTY=y
++CONFIG_CONSOLE_TRANSLATIONS=y
++CONFIG_VT_CONSOLE=y
++CONFIG_VT_CONSOLE_SLEEP=y
+ # CONFIG_LEGACY_PTYS is not set
+ # CONFIG_DEVMEM is not set
+ # CONFIG_DEVKMEM is not set
+@@ -466,8 +471,9 @@ CONFIG_FB=y
+ CONFIG_FB_ARMCLCD=y
+ CONFIG_BACKLIGHT_GENERIC=m
+ CONFIG_BACKLIGHT_LP855X=m
+-CONFIG_LOGO=y
+-# CONFIG_LOGO_LINUX_MONO is not set
++CONFIG_LOGO=n
++CONFIG_LOGO_LINUX_MONO=n
++CONFIG_FRAMEBUFFER_CONSOLE=n
+ # CONFIG_LOGO_LINUX_VGA16 is not set
+ CONFIG_SOUND=y
+ CONFIG_SND=y
+diff --git a/drivers/gpu/drm/drm_atomic.c b/drivers/gpu/drm/drm_atomic.c
+index 33778bf..6a50208 100644
+--- a/drivers/gpu/drm/drm_atomic.c
++++ b/drivers/gpu/drm/drm_atomic.c
+@@ -267,7 +267,7 @@ drm_atomic_get_crtc_state(struct drm_atomic_state *state,
+ {
+ 	int ret, index = drm_crtc_index(crtc);
+ 	struct drm_crtc_state *crtc_state;
+-
++	printk("hxy drm_atomic_get_crtc_state\n");
+ 	WARN_ON(!state->acquire_ctx);
+ 
+ 	crtc_state = drm_atomic_get_existing_crtc_state(state, crtc);
+@@ -1459,9 +1459,10 @@ int drm_atomic_check_only(struct drm_atomic_state *state)
+ 	if (config->funcs->atomic_check)
+ 		ret = config->funcs->atomic_check(state->dev, state);
+ 
+-	if (ret)
++	if (ret) {
++		printk("hxy drm_atomic_check_only \n");
+ 		return ret;
+-
++		}
+ 	if (!state->allow_modeset) {
+ 		for_each_crtc_in_state(state, crtc, crtc_state, i) {
+ 			if (drm_atomic_crtc_needs_modeset(crtc_state)) {
+@@ -1496,11 +1497,13 @@ int drm_atomic_commit(struct drm_atomic_state *state)
+ {
+ 	struct drm_mode_config *config = &state->dev->mode_config;
+ 	int ret;
++	printk("hxy drm_atomic_commit \n");
+ 
+ 	ret = drm_atomic_check_only(state);
+-	if (ret)
+-		return ret;
+-
++	if (ret) {
++		printk("hxy drm_atomic_commit return!\n");
++	 	return ret;
++	}
+ 	DRM_DEBUG_ATOMIC("commiting %p\n", state);
+ 
+ 	return config->funcs->atomic_commit(state->dev, state, false);
+diff --git a/drivers/gpu/drm/drm_atomic_helper.c b/drivers/gpu/drm/drm_atomic_helper.c
+index f34b4e8..a729d41 100644
+--- a/drivers/gpu/drm/drm_atomic_helper.c
++++ b/drivers/gpu/drm/drm_atomic_helper.c
+@@ -656,12 +656,15 @@ int drm_atomic_helper_check(struct drm_device *dev,
+ 			    struct drm_atomic_state *state)
+ {
+ 	int ret;
+-
++       dump_stack();
+ 	ret = drm_atomic_helper_check_modeset(dev, state);
++	printk("hxy drm_atomic_helper_check1 %d \n",ret);
+ 	if (ret)
+ 		return ret;
+ 
+ 	ret = drm_atomic_helper_check_planes(dev, state);
++	printk("hxy drm_atomic_helper_check2 %d \n",ret);
++
+ 	if (ret)
+ 		return ret;
+ 
+@@ -677,7 +680,7 @@ disable_outputs(struct drm_device *dev, struct drm_atomic_state *old_state)
+ 	struct drm_crtc *crtc;
+ 	struct drm_crtc_state *old_crtc_state;
+ 	int i;
+-
++	printk("hxy disable_outputs \n");
+ 	for_each_connector_in_state(old_state, connector, old_conn_state, i) {
+ 		const struct drm_encoder_helper_funcs *funcs;
+ 		struct drm_encoder *encoder;
+@@ -934,6 +937,7 @@ EXPORT_SYMBOL(drm_atomic_helper_commit_modeset_disables);
+  * and do the plane commits at the end. This is useful for drivers doing runtime
+  * PM since planes updates then only happen when the CRTC is actually enabled.
+  */
++ extern int waiting_for_hdmi_connect;
+ void drm_atomic_helper_commit_modeset_enables(struct drm_device *dev,
+ 					      struct drm_atomic_state *old_state)
+ {
+@@ -942,7 +946,12 @@ void drm_atomic_helper_commit_modeset_enables(struct drm_device *dev,
+ 	struct drm_connector *connector;
+ 	struct drm_connector_state *old_conn_state;
+ 	int i;
+-
++	printk("hxy drm_atomic_helper_commit_modeset_enables \n");
++//	if(waiting_for_hdmi_connect)
++//		{
++//			printk("hxy waiting_for_hdmi_connect,return!");
++//			return;
++//	}
+ 	for_each_crtc_in_state(old_state, crtc, old_crtc_state, i) {
+ 		const struct drm_crtc_helper_funcs *funcs;
+ 
+@@ -1170,7 +1179,7 @@ EXPORT_SYMBOL(drm_atomic_helper_wait_for_vblanks);
+ void drm_atomic_helper_commit_tail(struct drm_atomic_state *state)
+ {
+ 	struct drm_device *dev = state->dev;
+-
++	printk("drm_atomic_helper_commit_tail \n");
+ 	drm_atomic_helper_commit_modeset_disables(dev, state);
+ 
+ 	drm_atomic_helper_commit_planes(dev, state, 0);
+@@ -1773,8 +1782,10 @@ void drm_atomic_helper_commit_planes(struct drm_device *dev,
+ 
+ 		funcs->atomic_begin(crtc, old_crtc_state);
+ 	}
+-
++	printk("hxy drm_atomic_helper_commit_planes!1 \n");
+ 	for_each_plane_in_state(old_state, plane, old_plane_state, i) {
++	printk("hxy drm_atomic_helper_commit_planes!2\n");
++
+ 		const struct drm_plane_helper_funcs *funcs;
+ 		bool disabling;
+ 
+@@ -1884,6 +1895,11 @@ drm_atomic_helper_commit_planes_on_crtc(struct drm_crtc_state *old_crtc_state)
+ 		else if (plane->state->crtc ||
+ 			 drm_atomic_plane_disabling(plane, old_plane_state))
+ 			plane_funcs->atomic_update(plane, old_plane_state);
++		else {
++				printk("hxy here waiting_for_hdmi_connect %d \n",waiting_for_hdmi_connect);
++				if(!waiting_for_hdmi_connect)
++				 plane_funcs->atomic_update(plane, old_plane_state);		
++			}
+ 	}
+ 
+ 	if (crtc_funcs && crtc_funcs->atomic_flush)
+@@ -2887,6 +2903,7 @@ int drm_atomic_helper_connector_dpms(struct drm_connector *connector,
+ 	int ret;
+ 	bool active = false;
+ 	int old_mode = connector->dpms;
++      printk("hxy drm_atomic_helper_connector_dpms!\n");
+ 
+ 	if (mode != DRM_MODE_DPMS_ON)
+ 		mode = DRM_MODE_DPMS_OFF;
+diff --git a/drivers/gpu/drm/drm_connector.c b/drivers/gpu/drm/drm_connector.c
+index 0e934a9..53387ce 100644
+--- a/drivers/gpu/drm/drm_connector.c
++++ b/drivers/gpu/drm/drm_connector.c
+@@ -324,6 +324,7 @@ void drm_connector_cleanup(struct drm_connector *connector)
+ {
+ 	struct drm_device *dev = connector->dev;
+ 	struct drm_display_mode *mode, *t;
++      printk("hxy drm_connector_cleanup!\n");
+ 
+ 	/* The connector should have been removed from userspace long before
+ 	 * it is finally destroyed.
+diff --git a/drivers/gpu/drm/drm_drv.c b/drivers/gpu/drm/drm_drv.c
+index 80a903b..990c97fe 100644
+--- a/drivers/gpu/drm/drm_drv.c
++++ b/drivers/gpu/drm/drm_drv.c
+@@ -42,7 +42,7 @@
+  * drm_debug: Enable debug output.
+  * Bitmask of DRM_UT_x. See include/drm/drmP.h for details.
+  */
+-unsigned int drm_debug = 0;
++unsigned int drm_debug = 0xff;
+ EXPORT_SYMBOL(drm_debug);
+ 
+ MODULE_AUTHOR("Gareth Hughes, Leif Delgass, José Fonseca, Jon Smirl");
+diff --git a/drivers/gpu/drm/drm_encoder.c b/drivers/gpu/drm/drm_encoder.c
+index 5c06771..d1c2077 100644
+--- a/drivers/gpu/drm/drm_encoder.c
++++ b/drivers/gpu/drm/drm_encoder.c
+@@ -134,7 +134,7 @@ int drm_encoder_init(struct drm_device *dev,
+ 		ret = -ENOMEM;
+ 		goto out_put;
+ 	}
+-
++	printk("hxy drm_encoder_init encoder->name %s \n",encoder->name);
+ 	list_add_tail(&encoder->head, &dev->mode_config.encoder_list);
+ 	encoder->index = dev->mode_config.num_encoder++;
+ 
+diff --git a/drivers/gpu/drm/drm_fb_cma_helper.c b/drivers/gpu/drm/drm_fb_cma_helper.c
+index a7ac41f..8e853bb 100644
+--- a/drivers/gpu/drm/drm_fb_cma_helper.c
++++ b/drivers/gpu/drm/drm_fb_cma_helper.c
+@@ -29,6 +29,11 @@
+ #include <linux/module.h>
+ #include <linux/reservation.h>
+ 
++#include <linux/ion.h>
++#include <linux/hisi/hisi_ion.h>
++
++//#include "hisilicon/kirin960/kirin_drm_drv.h"
++
+ #define DEFAULT_FBDEFIO_DELAY_MS 50
+ #ifdef CONFIG_DRM_CMA_FBDEV_BUFFER_NUM
+ #define FBDEV_BUFFER_NUM CONFIG_DRM_CMA_FBDEV_BUFFER_NUM
+@@ -342,11 +347,14 @@ int drm_fb_cma_debugfs_show(struct seq_file *m, void *arg)
+ }
+ EXPORT_SYMBOL_GPL(drm_fb_cma_debugfs_show);
+ #endif
+-
++static int fake_kirin_fbdev_mmap(struct fb_info *info, struct vm_area_struct * vma);
+ static int drm_fb_cma_mmap(struct fb_info *info, struct vm_area_struct *vma)
+ {
+-	return dma_mmap_writecombine(info->device, vma, info->screen_base,
+-				     info->fix.smem_start, info->fix.smem_len);
++//	int ret = dma_mmap_writecombine(info->device, vma, info->screen_base,
++//				     info->fix.smem_start, info->fix.smem_len);
++	int ret = fake_kirin_fbdev_mmap(info,vma);
++	printk("hxy drm_fb_cma_mmap %d \n",ret);
++	return ret;
+ }
+ 
+ static struct fb_ops drm_fbdev_cma_ops = {
+@@ -376,6 +384,7 @@ static int drm_fbdev_cma_defio_init(struct fb_info *fbi,
+ {
+ 	struct fb_deferred_io *fbdefio;
+ 	struct fb_ops *fbops;
++		printk("hxy drm_fbdev_cma_defio_init  !\n");		
+ 
+ 	/*
+ 	 * Per device structures are needed because:
+@@ -417,6 +426,157 @@ static void drm_fbdev_cma_defio_fini(struct fb_info *fbi)
+ 	kfree(fbi->fbops);
+ }
+ 
++
++
++void *screen_base_G;
++unsigned long smem_start_G;
++unsigned long screen_size_G;
++struct iommu_map_format iommu_format_G;
++struct ion_client *client_G= NULL;
++struct ion_handle *handle_G= NULL;
++
++//struct fb_info fb_dev_g;
++
++#define HISI_FB_ION_CLIENT_NAME	"hisi_fb_ion"
++//	fbi->screen_base = obj->vaddr + offset;
++
++	
++//	fbi->fix.smem_start = (unsigned long)(obj->paddr + offset);
++
++unsigned long fake_kirin_alloc_fb_buffer(int size)
++{
++
++	size_t buf_len = 0;
++	unsigned long buf_addr = 0;
++	int shared_fd = -1;
++	printk("hxy kirin_alloc_fb_buffer in cma mode!!!");
++	buf_len = size;
++	client_G = hisi_ion_client_create(HISI_FB_ION_CLIENT_NAME);
++	if (!client_G) {
++		DRM_ERROR("failed to create ion client!\n");
++		return -ENOMEM;
++	}
++
++#ifdef CONFIG_HISI_FB_HEAP_CARVEOUT_USED
++	handle_G = ion_alloc(client_G, buf_len, PAGE_SIZE, ION_HEAP(ION_GRALLOC_HEAP_ID), 0);
++#else
++	handle_G = ion_alloc(client_G, buf_len, PAGE_SIZE, ION_HEAP(ION_SYSTEM_HEAP_ID), 0);
++#endif
++	if (!handle_G) {
++		DRM_ERROR("failed to ion_alloc!\n");
++		goto err_return;
++	}
++
++	screen_base_G = ion_map_kernel(client_G, handle_G);
++	if (!screen_base_G) {
++		DRM_ERROR("failed to ion_map_kernel!\n");
++		goto err_ion_map;
++	}
++
++#ifdef CONFIG_HISI_FB_HEAP_CARVEOUT_USED
++	if (ion_phys(client_G, handle_G, &buf_addr, &buf_len) < 0) {
++		DRM_ERROR("failed to get ion phys!\n");
++		goto err_ion_get_addr;
++	}
++#else
++	if (ion_map_iommu(client_G, handle_G, &iommu_format_G)) {
++		DRM_ERROR("failed to ion_map_iommu!\n");
++		goto err_ion_get_addr;
++	}
++
++	buf_addr = iommu_format_G.iova_start;
++#endif
++
++	smem_start_G = buf_addr;
++	screen_size_G = buf_len;
++	memset(screen_base_G, 0x0, screen_size_G);
++
++	DRM_INFO("hxy fake fbdev->smem_start = 0x%x, fbdev->screen_base = 0x%x\n",
++		smem_start_G, screen_size_G);
++
++	return buf_addr;
++
++err_ion_get_addr:
++	ion_unmap_kernel(client_G, handle_G);
++err_ion_map:
++	ion_free(client_G, handle_G);
++err_return:
++	return 0;
++}
++
++static int fake_kirin_fbdev_mmap(struct fb_info *info, struct vm_area_struct * vma)
++{
++	struct sg_table *table = NULL;
++	struct scatterlist *sg = NULL;
++	struct page *page = NULL;
++	unsigned long remainder = 0;
++	unsigned long len = 0;
++	unsigned long addr = 0;
++	unsigned long offset = 0;
++	unsigned long size = 0;
++	int i = 0;
++	int ret = 0;
++
++	struct drm_fb_helper *helper = (struct drm_fb_helper *)info->par;
++
++	if (NULL == info) {
++		DRM_ERROR("info is NULL!\n");
++		return -EINVAL;
++	}
++
++	table = ion_sg_table(client_G, handle_G);
++	if ((table == NULL) || (vma == NULL)) {
++		DRM_ERROR("table or vma is NULL!\n");
++		return -EFAULT;
++	}
++
++	vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
++
++	addr = vma->vm_start;
++	offset = vma->vm_pgoff * PAGE_SIZE;
++	size = vma->vm_end - vma->vm_start;
++	DRM_INFO("fake_kirin_fbdev_mmap addr = 0x%x, offset = %d, size = %d!\n", addr, offset, size);
++	if (size > info->fix.smem_len) {
++		DRM_ERROR("size=%lu is out of range(%u)!\n", size, info->fix.smem_len);
++		return -EFAULT;
++	}
++	DRM_INFO("ffake_kirin_fbdev_mmap bdev->smem_start = 0x%x, fbdev->screen_base = 0x%x\n",
++		smem_start_G, screen_base_G);
++
++	for_each_sg(table->sgl, sg, table->nents, i) {
++		page = sg_page(sg);
++		remainder = vma->vm_end - addr;
++		len = sg->length;
++
++		if (offset >= sg->length) {
++			offset -= sg->length;
++			continue;
++		} else if (offset) {
++			page += offset / PAGE_SIZE;
++			len = sg->length - offset;
++			offset = 0;
++		}
++		len = min(len, remainder);
++		ret = remap_pfn_range(vma, addr, page_to_pfn(page), len,
++			vma->vm_page_prot);
++		if (ret != 0) {
++			DRM_ERROR("fake_kirin_fbdev_mmap failed to remap_pfn_range! ret=%d\n", ret);
++		}
++
++		addr += len;
++		if (addr >= vma->vm_end) {
++			DRM_ERROR("fake_kirin_fbdev_mmap addr = 0x%x!, vma->vm_end = 0x%x\n", addr, vma->vm_end);
++
++			return 0;
++		}
++	}
++
++	DRM_INFO("fake_kirin_fbdev_mmap kirin_fbdev_mmap addr = 0x%x!\n", addr);
++
++	return 0;
++}
++
++
+ /*
+  * For use in a (struct drm_fb_helper_funcs *)->fb_probe callback function that
+  * needs custom struct drm_framebuffer_funcs, like dirty() for deferred_io use.
+@@ -436,7 +596,7 @@ int drm_fbdev_cma_create_with_funcs(struct drm_fb_helper *helper,
+ 	size_t size;
+ 	int ret;
+ 
+-	DRM_DEBUG_KMS("surface width(%d), height(%d) and bpp(%d)\n",
++	printk("surface width(%d), height(%d) and bpp(%d)\n",
+ 			sizes->surface_width, sizes->surface_height,
+ 			sizes->surface_bpp);
+ 
+@@ -449,6 +609,8 @@ int drm_fbdev_cma_create_with_funcs(struct drm_fb_helper *helper,
+ 		sizes->surface_depth);
+ 
+ 	size = mode_cmd.pitches[0] * mode_cmd.height;
++
++	fake_kirin_alloc_fb_buffer(size);
+ 	obj = drm_gem_cma_create(dev, size);
+ 	if (IS_ERR(obj))
+ 		return -ENOMEM;
+@@ -479,8 +641,13 @@ int drm_fbdev_cma_create_with_funcs(struct drm_fb_helper *helper,
+ 	offset = fbi->var.xoffset * bytes_per_pixel;
+ 	offset += fbi->var.yoffset * fb->pitches[0];
+ 
+-	dev->mode_config.fb_base = (resource_size_t)obj->paddr;
+-	fbi->screen_base = obj->vaddr + offset;
++	obj->paddr = smem_start_G;
++//	dev->mode_config.fb_base = (resource_size_t)obj->paddr;
++//	fbi->screen_base = obj->vaddr + offset;
++	fbi->screen_base = screen_base_G;
++       obj->vaddr = screen_base_G - offset;
++
++	
+ 	fbi->fix.smem_start = (unsigned long)(obj->paddr + offset);
+ 	fbi->screen_size = size;
+ 	fbi->fix.smem_len = size;
+@@ -490,7 +657,7 @@ int drm_fbdev_cma_create_with_funcs(struct drm_fb_helper *helper,
+ 		if (ret)
+ 			goto err_cma_destroy;
+ 	}
+-
++	printk("hxy drm_fbdev_cma_create_with_funcs is ok!!!smem_start 0x%x  smem_len 0x%x  screen_base 0x%x \n",fbi->fix.smem_start,fbi->fix.smem_len,fbi->screen_base);
+ 	return 0;
+ 
+ err_cma_destroy:
+@@ -507,6 +674,7 @@ EXPORT_SYMBOL(drm_fbdev_cma_create_with_funcs);
+ static int drm_fbdev_cma_create(struct drm_fb_helper *helper,
+ 	struct drm_fb_helper_surface_size *sizes)
+ {
++	printk("hxy drm_fbdev_cma_create!!!");
+ 	return drm_fbdev_cma_create_with_funcs(helper, sizes, &drm_fb_cma_funcs);
+ }
+ 
+@@ -554,7 +722,9 @@ struct drm_fbdev_cma *drm_fbdev_cma_init_with_funcs(struct drm_device *dev,
+ 		goto err_drm_fb_helper_fini;
+ 
+ 	}
+-
++	/* disable all the possible outputs/crtcs before entering KMS mode */
++	drm_helper_disable_unused_functions(dev);
++	
+ 	ret = drm_fb_helper_initial_config(helper, preferred_bpp);
+ 	if (ret < 0) {
+ 		dev_err(dev->dev, "Failed to set initial hw configuration.\n");
+diff --git a/drivers/gpu/drm/drm_fb_helper.c b/drivers/gpu/drm/drm_fb_helper.c
+index 6a48d66..9defcf0 100644
+--- a/drivers/gpu/drm/drm_fb_helper.c
++++ b/drivers/gpu/drm/drm_fb_helper.c
+@@ -120,6 +120,7 @@ int drm_fb_helper_single_add_all_connectors(struct drm_fb_helper *fb_helper)
+ 	if (!drm_fbdev_emulation)
+ 		return 0;
+ 
++	printk("hxy drm_fb_helper_single_add_all_connectors!\n");
+ 	mutex_lock(&dev->mode_config.mutex);
+ 	drm_for_each_connector(connector, dev) {
+ 		ret = drm_fb_helper_add_one_connector(fb_helper, connector);
+@@ -128,6 +129,7 @@ int drm_fb_helper_single_add_all_connectors(struct drm_fb_helper *fb_helper)
+ 			goto fail;
+ 	}
+ 	mutex_unlock(&dev->mode_config.mutex);
++	printk("hxy drm_fb_helper_single_add_all_connectors out!\n");
+ 	return 0;
+ fail:
+ 	for (i = 0; i < fb_helper->connector_count; i++) {
+@@ -172,6 +174,7 @@ int drm_fb_helper_add_one_connector(struct drm_fb_helper *fb_helper, struct drm_
+ 	drm_connector_reference(connector);
+ 	fb_helper_connector->connector = connector;
+ 	fb_helper->connector_info[fb_helper->connector_count++] = fb_helper_connector;
++	printk("hxy drm_fb_helper_add_one_connector connector->name %s \n",connector->name);
+ 	return 0;
+ }
+ EXPORT_SYMBOL(drm_fb_helper_add_one_connector);
+@@ -325,6 +328,7 @@ static int restore_fbdev_mode_atomic(struct drm_fb_helper *fb_helper)
+ 	struct drm_atomic_state *state;
+ 	int i, ret;
+ 	unsigned plane_mask;
++	printk("hxy restore_fbdev_mode_atomic \n");
+ 
+ 	state = drm_atomic_state_alloc(dev);
+ 	if (!state)
+@@ -391,6 +395,7 @@ static int restore_fbdev_mode(struct drm_fb_helper *fb_helper)
+ 	int i;
+ 
+ 	drm_warn_on_modeset_not_all_locked(dev);
++	printk("hxy restore_fbdev_mode \n");
+ 
+ 	if (dev->mode_config.funcs->atomic_commit)
+ 		return restore_fbdev_mode_atomic(fb_helper);
+@@ -445,6 +450,7 @@ int drm_fb_helper_restore_fbdev_mode_unlocked(struct drm_fb_helper *fb_helper)
+ 	struct drm_device *dev = fb_helper->dev;
+ 	bool do_delayed;
+ 	int ret;
++	printk("hxy drm_fb_helper_restore_fbdev_mode_unlocked \n");
+ 
+ 	if (!drm_fbdev_emulation)
+ 		return -ENODEV;
+@@ -579,8 +585,12 @@ static void drm_fb_helper_dpms(struct fb_info *info, int dpms_mode)
+  */
+ int drm_fb_helper_blank(int blank, struct fb_info *info)
+ {
+-	if (oops_in_progress)
++			printk("hxy drm_fb_helper_blank !\n");		
++
++	if (oops_in_progress) {
++			printk("hxy drm_fb_helper_blank error!\n");		
+ 		return -EBUSY;
++	}
+ 
+ 	switch (blank) {
+ 	/* Display: On; HSync: On, VSync: On */
+@@ -981,6 +991,8 @@ void drm_fb_helper_sys_fillrect(struct fb_info *info,
+ 	sys_fillrect(info, rect);
+ 	drm_fb_helper_dirty(info, rect->dx, rect->dy,
+ 			    rect->width, rect->height);
++		printk("hxy drm_fb_helper_sys_fillrect \n");
++
+ }
+ EXPORT_SYMBOL(drm_fb_helper_sys_fillrect);
+ 
+@@ -997,6 +1009,7 @@ void drm_fb_helper_sys_copyarea(struct fb_info *info,
+ 	sys_copyarea(info, area);
+ 	drm_fb_helper_dirty(info, area->dx, area->dy,
+ 			    area->width, area->height);
++	printk("hxy drm_fb_helper_sys_copyarea \n");
+ }
+ EXPORT_SYMBOL(drm_fb_helper_sys_copyarea);
+ 
+@@ -1013,6 +1026,7 @@ void drm_fb_helper_sys_imageblit(struct fb_info *info,
+ 	sys_imageblit(info, image);
+ 	drm_fb_helper_dirty(info, image->dx, image->dy,
+ 			    image->width, image->height);
++	printk("hxy drm_fb_helper_sys_imageblit \n");
+ }
+ EXPORT_SYMBOL(drm_fb_helper_sys_imageblit);
+ 
+@@ -1183,13 +1197,16 @@ int drm_fb_helper_setcmap(struct fb_cmap *cmap, struct fb_info *info)
+ 	struct drm_crtc *crtc;
+ 	int i, j, rc = 0;
+ 	int start;
++	printk("hxy drm_fb_helper_setcmap in !\n");		
+ 
+-	if (oops_in_progress)
++	if (oops_in_progress) {
++		printk("hxy drm_fb_helper_setcmap in erro 1 !\n");		
+ 		return -EBUSY;
+-
++	}
+ 	drm_modeset_lock_all(dev);
+ 	if (!drm_fb_helper_is_bound(fb_helper)) {
+ 		drm_modeset_unlock_all(dev);
++		printk("hxy drm_fb_helper_setcmap in erro 2 !\n");				
+ 		return -EBUSY;
+ 	}
+ 
+@@ -1213,14 +1230,18 @@ int drm_fb_helper_setcmap(struct fb_cmap *cmap, struct fb_info *info)
+ 			if (transp)
+ 				htransp = *transp++;
+ 
+-			rc = setcolreg(crtc, hred, hgreen, hblue, start++, info);
+-			if (rc)
+-				goto out;
++			rc = setcolreg(crtc, hred, hgreen, hblue, start++, info);			
++			if (rc) {
++				printk("hxy drm_fb_helper_setcmap in erro 3 !%d \n",rc);				
++				//goto out;
++				rc =0;
++			}
+ 		}
+ 		if (crtc_funcs->load_lut)
+ 			crtc_funcs->load_lut(crtc);
+ 	}
+  out:
++ 		printk("hxy drm_fb_helper_setcmap out %d !\n",rc);		
+ 	drm_modeset_unlock_all(dev);
+ 	return rc;
+ }
+@@ -1245,7 +1266,7 @@ int drm_fb_helper_check_var(struct fb_var_screeninfo *var,
+ 	if (var->bits_per_pixel > fb->bits_per_pixel ||
+ 	    var->xres > fb->width || var->yres > fb->height ||
+ 	    var->xres_virtual > fb->width || var->yres_virtual > fb->height) {
+-		DRM_DEBUG("fb userspace requested width/height/bpp is greater than current fb "
++		DRM_DEBUG("hxy fb userspace requested width/height/bpp is greater than current fb "
+ 			  "request %dx%d-%d (virtual %dx%d) > %dx%d-%d\n",
+ 			  var->xres, var->yres, var->bits_per_pixel,
+ 			  var->xres_virtual, var->yres_virtual,
+@@ -1317,6 +1338,7 @@ int drm_fb_helper_check_var(struct fb_var_screeninfo *var,
+ 		var->transp.offset = 24;
+ 		break;
+ 	default:
++		printk("hxy drm_fb_helper_check_var error!\n");
+ 		return -EINVAL;
+ 	}
+ 	return 0;
+@@ -1335,12 +1357,13 @@ int drm_fb_helper_set_par(struct fb_info *info)
+ {
+ 	struct drm_fb_helper *fb_helper = info->par;
+ 	struct fb_var_screeninfo *var = &info->var;
+-
+-	if (oops_in_progress)
++	printk("hxy drm_fb_helper_set_par \n");
++	if (oops_in_progress) {
++		printk("hxy drm_fb_helper_set_par error!\n");	
+ 		return -EBUSY;
+-
++	}
+ 	if (var->pixclock != 0) {
+-		DRM_ERROR("PIXEL CLOCK SET\n");
++		DRM_ERROR("hxy PIXEL CLOCK SET\n");
+ 		return -EINVAL;
+ 	}
+ 
+@@ -1423,12 +1446,15 @@ int drm_fb_helper_pan_display(struct fb_var_screeninfo *var,
+ 	struct drm_mode_set *modeset;
+ 	int ret = 0;
+ 	int i;
++		printk("hxy drm_fb_helper_pan_display in !\n");		
+ 
+ 	if (oops_in_progress)
+ 		return -EBUSY;
+ 
+ 	drm_modeset_lock_all(dev);
+ 	if (!drm_fb_helper_is_bound(fb_helper)) {
++		printk("hxy drm_fb_helper_pan_display error !\n");		
++
+ 		drm_modeset_unlock_all(dev);
+ 		return -EBUSY;
+ 	}
+@@ -1454,6 +1480,8 @@ int drm_fb_helper_pan_display(struct fb_var_screeninfo *var,
+ 	}
+ unlock:
+ 	drm_modeset_unlock_all(dev);
++	printk("hxy drm_fb_helper_pan_display out %d !\n",ret);		
++
+ 	return ret;
+ }
+ EXPORT_SYMBOL(drm_fb_helper_pan_display);
+@@ -1472,7 +1500,7 @@ static int drm_fb_helper_single_fb_probe(struct drm_fb_helper *fb_helper,
+ 	struct fb_info *info;
+ 	struct drm_fb_helper_surface_size sizes;
+ 	int gamma_size = 0;
+-
++	printk("hxy drm_fb_helper_single_fb_probe!");
+ 	memset(&sizes, 0, sizeof(struct drm_fb_helper_surface_size));
+ 	sizes.surface_depth = 24;
+ 	sizes.surface_bpp = 32;
+@@ -2303,7 +2331,7 @@ int drm_fb_helper_hotplug_event(struct drm_fb_helper *fb_helper)
+ 		mutex_unlock(&fb_helper->dev->mode_config.mutex);
+ 		return 0;
+ 	}
+-	DRM_DEBUG_KMS("\n");
++	DRM_DEBUG_KMS("ssss \n");
+ 
+ 	max_width = fb_helper->fb->width;
+ 	max_height = fb_helper->fb->height;
+diff --git a/drivers/gpu/drm/drm_gem_cma_helper.c b/drivers/gpu/drm/drm_gem_cma_helper.c
+index 1d6c335..9c44ee6 100644
+--- a/drivers/gpu/drm/drm_gem_cma_helper.c
++++ b/drivers/gpu/drm/drm_gem_cma_helper.c
+@@ -102,7 +102,7 @@ struct drm_gem_cma_object *drm_gem_cma_create(struct drm_device *drm,
+ {
+ 	struct drm_gem_cma_object *cma_obj;
+ 	int ret;
+-
++	printk("hxy drm_gem_cma_create!");
+ 	size = round_up(size, PAGE_SIZE);
+ 
+ 	cma_obj = __drm_gem_cma_create(drm, size);
+@@ -117,7 +117,6 @@ struct drm_gem_cma_object *drm_gem_cma_create(struct drm_device *drm,
+ 		ret = -ENOMEM;
+ 		goto error;
+ 	}
+-
+ 	return cma_obj;
+ 
+ error:
+diff --git a/drivers/gpu/drm/drm_irq.c b/drivers/gpu/drm/drm_irq.c
+index 48a6167..b3a498a 100644
+--- a/drivers/gpu/drm/drm_irq.c
++++ b/drivers/gpu/drm/drm_irq.c
+@@ -145,6 +145,7 @@ static void drm_reset_vblank_timestamp(struct drm_device *dev, unsigned int pipe
+  * Note: caller must hold dev->vbl_lock since this reads & writes
+  * device vblank fields.
+  */
++ int debug_mask=0;
+ static void drm_update_vblank_count(struct drm_device *dev, unsigned int pipe,
+ 				    unsigned long flags)
+ {
+@@ -213,10 +214,14 @@ static void drm_update_vblank_count(struct drm_device *dev, unsigned int pipe,
+ 		diff = 1;
+ 	}
+ 
++	if(debug_mask == 0xff) {
+ 	DRM_DEBUG_VBL("updating vblank count on crtc %u:"
+ 		      " current=%u, diff=%u, hw=%u hw_last=%u\n",
+ 		      pipe, vblank->count, diff, cur_vblank, vblank->last);
++	debug_mask =0;
++	}
+ 
++      debug_mask ++;
+ 	if (diff == 0) {
+ 		WARN_ON_ONCE(cur_vblank != vblank->last);
+ 		return;
+@@ -1135,12 +1140,13 @@ static int drm_vblank_enable(struct drm_device *dev, unsigned int pipe)
+  * Returns:
+  * Zero on success or a negative error code on failure.
+  */
++
+ static int drm_vblank_get(struct drm_device *dev, unsigned int pipe)
+ {
+ 	struct drm_vblank_crtc *vblank = &dev->vblank[pipe];
+ 	unsigned long irqflags;
+ 	int ret = 0;
+-
++	printk("hxy num_crtcs %d \n",dev->num_crtcs);
+ 	if (!dev->num_crtcs)
+ 		return -EINVAL;
+ 
+diff --git a/drivers/gpu/drm/drm_probe_helper.c b/drivers/gpu/drm/drm_probe_helper.c
+index 276474d..aaf290a 100644
+--- a/drivers/gpu/drm/drm_probe_helper.c
++++ b/drivers/gpu/drm/drm_probe_helper.c
+@@ -232,7 +232,7 @@ int drm_helper_probe_single_connector_modes(struct drm_connector *connector,
+ 
+ 	WARN_ON(!mutex_is_locked(&dev->mode_config.mutex));
+ 
+-	DRM_DEBUG_KMS("[CONNECTOR:%d:%s]\n", connector->base.id,
++	DRM_DEBUG_KMS("hxy [CONNECTOR:%d:%s]\n", connector->base.id,
+ 			connector->name);
+ 	/* set all old modes to the stale state */
+ 	list_for_each_entry(mode, &connector->modes, head)
+@@ -252,6 +252,8 @@ int drm_helper_probe_single_connector_modes(struct drm_connector *connector,
+ 		connector->status = connector->funcs->detect(connector, true);
+ 	}
+ 
++	printk("[CONNECTOR:%d:%s] status updated %s\n",connector->base.id,
++			      connector->name,connector->status);
+ 	/*
+ 	 * Normally either the driver's hpd code or the poll loop should
+ 	 * pick up any changes and fire the hotplug event. But if
+diff --git a/drivers/gpu/drm/hisilicon/kirin/kirin_drm_drv.c b/drivers/gpu/drm/hisilicon/kirin/kirin_drm_drv.c
+index 90377a6..87c4e2b 100644
+--- a/drivers/gpu/drm/hisilicon/kirin/kirin_drm_drv.c
++++ b/drivers/gpu/drm/hisilicon/kirin/kirin_drm_drv.c
+@@ -90,7 +90,7 @@ static int kirin_drm_kms_init(struct drm_device *dev)
+ {
+ 	struct kirin_drm_private *priv;
+ 	int ret;
+-
++	printk("hxy kirin_drm_kms_init 1 \n");
+ 	priv = devm_kzalloc(dev->dev, sizeof(*priv), GFP_KERNEL);
+ 	if (!priv)
+ 		return -ENOMEM;
+@@ -205,7 +205,7 @@ static int kirin_drm_bind(struct device *dev)
+ 	struct drm_driver *driver = &kirin_drm_driver;
+ 	struct drm_device *drm_dev;
+ 	int ret;
+-
++	printk("hxy kirin_drm_bind 1!!!\n");
+ 	drm_dev = drm_dev_alloc(driver, dev);
+ 	if (IS_ERR(drm_dev))
+ 		return PTR_ERR(drm_dev);
+diff --git a/drivers/gpu/drm/hisilicon/kirin960/dw_drm_dsi.c b/drivers/gpu/drm/hisilicon/kirin960/dw_drm_dsi.c
+index f1376ed..61c57dc 100644
+--- a/drivers/gpu/drm/hisilicon/kirin960/dw_drm_dsi.c
++++ b/drivers/gpu/drm/hisilicon/kirin960/dw_drm_dsi.c
+@@ -37,7 +37,7 @@
+ #endif
+ #include "kirin_drm_dpe_utils.h"
+ #include "kirin_drm_drv.h"
+-
++#include <asm/ptrace.h>
+ #if defined (CONFIG_HISI_FB_970)
+ #define DTS_COMP_DSI_NAME "hisilicon,kirin970-dsi"
+ #else
+@@ -268,6 +268,7 @@ static const struct dsi_phy_range dphy_range_info[] = {
+ 	{ 1000000,  1500000,   0,    0 }
+ };
+ 
++int waiting_for_hdmi_connect=1;
+ void dsi_set_output_client(struct drm_device *dev)
+ {
+ 	enum dsi_output_client client;
+@@ -306,6 +307,7 @@ void dsi_set_output_client(struct drm_device *dev)
+ 		drm_sysfs_hotplug_event(dev);
+ 		DRM_INFO("client change to %s\n", client == OUT_HDMI ?
+ 				 "HDMI" : "panel");
++		waiting_for_hdmi_connect = 0;
+ 	}
+ 
+ 	mutex_unlock(&dev->mode_config.mutex);
+@@ -1048,7 +1050,8 @@ static void dsi_mipi_init(struct dw_dsi *dsi, char __iomem *mipi_dsi_base)
+ 	dss_rect_t rect;
+ 	u32 cmp_stopstate_val = 0;
+ 	u32 lanes;
+-
++	printk("hxy dsi_mipi_init\n");
++	dump_stack();
+ 	WARN_ON(!dsi);
+ 	WARN_ON(!mipi_dsi_base);
+ 
+@@ -1340,6 +1343,8 @@ static void dsi_encoder_disable(struct drm_encoder *encoder)
+ 	struct dw_dsi *dsi = encoder_to_dsi(encoder);
+ 	struct dsi_hw_ctx *ctx = dsi->ctx;
+ 	void __iomem *base = ctx->base;
++	printk("hxy dsi_encoder_disable \n");
++	dump_stack();
+ 
+ 	if (!dsi->enable)
+ 		return;
+@@ -1366,7 +1371,7 @@ static void dsi_encoder_disable(struct drm_encoder *encoder)
+ static int mipi_dsi_on_sub1(struct dw_dsi *dsi, char __iomem *mipi_dsi_base)
+ {
+ 	WARN_ON(!mipi_dsi_base);
+-
++	printk("mipi_dsi_on_sub1 \n");
+ 	/* mipi init */
+ 	dsi_mipi_init(dsi, mipi_dsi_base);
+ 
+@@ -1421,7 +1426,7 @@ static void dsi_encoder_enable(struct drm_encoder *encoder)
+ 	struct dw_dsi *dsi = encoder_to_dsi(encoder);
+ 	struct dsi_hw_ctx *ctx = dsi->ctx;
+ 	int ret;
+-
++	printk("hxy dsi_encoder_enable \n");
+ 	if (dsi->enable)
+ 		return;
+ 
+@@ -1494,7 +1499,7 @@ static int dw_drm_encoder_init(struct device *dev,
+ {
+ 	int ret;
+ 	u32 crtc_mask = drm_of_find_possible_crtcs(drm_dev, dev->of_node);
+-
++	printk("dw_drm_encoder_init \n");
+ 	if (!crtc_mask) {
+ 		DRM_ERROR("failed to find crtc mask\n");
+ 		return -EINVAL;
+diff --git a/drivers/gpu/drm/hisilicon/kirin960/hdmi/adv7535.c b/drivers/gpu/drm/hisilicon/kirin960/hdmi/adv7535.c
+index 818b4b6..29dd59a0 100644
+--- a/drivers/gpu/drm/hisilicon/kirin960/hdmi/adv7535.c
++++ b/drivers/gpu/drm/hisilicon/kirin960/hdmi/adv7535.c
+@@ -27,6 +27,7 @@
+ #include <linux/regulator/machine.h>
+ 
+ #include "adv7535.h"
++#include <asm/ptrace.h>
+ 
+ #define HPD_ENABLE	1
+ //#define TEST_COLORBAR_DISPLAY
+@@ -396,6 +397,7 @@ static void adv7511_dsi_config_tgen(struct adv7511 *adv7511)
+ 	/* set pixel clock auto mode */
+ 	regmap_write(adv7511->regmap_cec, 0x16,
+ 			0x00);
++     printk("hxy colorbar test 0x16,0x00!");
+ #else
+ 	/* set pixel clock divider mode */
+ 	regmap_write(adv7511->regmap_cec, 0x16,
+@@ -445,6 +447,8 @@ static void adv7511_dsi_receiver_dpms(struct adv7511 *adv7511)
+ 		regmap_write(adv7511->regmap_cec, 0x27, 0xcb);
+ 		regmap_write(adv7511->regmap_cec, 0x27, 0x8b);
+ 		regmap_write(adv7511->regmap_cec, 0x27, 0xcb);
++    		 printk("hxy colorbar test 0x27,0xcb!");
++		
+ #else
+ 		/* disable internal timing generator */
+ 		regmap_write(adv7511->regmap_cec, 0x27, 0x0b);
+@@ -456,6 +460,8 @@ static void adv7511_dsi_receiver_dpms(struct adv7511 *adv7511)
+ #ifdef TEST_COLORBAR_DISPLAY
+ 		/*enable test mode */
+ 		regmap_write(adv7511->regmap_cec, 0x55, 0x80);//display colorbar
++    		 printk("hxy colorbar test 0x55,0x80!");
++		
+ #else
+ 		/* disable test mode */
+ 		regmap_write(adv7511->regmap_cec, 0x55, 0x00);
+@@ -535,6 +541,8 @@ static void adv7511_dsi_receiver_dpms(struct adv7511 *adv7511)
+ 
+ static void adv7511_power_on(struct adv7511 *adv7511)
+ {
++      printk("hxy adv7511_power_on!");
++      dump_stack();
+ 	adv7511->current_edid_segment = -1;
+ 
+ 	regmap_write(adv7511->regmap, ADV7511_REG_INT(0),
+@@ -579,7 +587,7 @@ static void adv7511_power_off(struct adv7511 *adv7511)
+ 	regcache_mark_dirty(adv7511->regmap);
+ 
+ 	adv7511->powered = false;
+-
++	printk("hxy adv7511_power_off!!" );
+ 	adv7511_dsi_receiver_dpms(adv7511);
+ }
+ 
+@@ -742,6 +750,7 @@ static int adv7511_get_edid_block(void *data, u8 *buf, unsigned int block,
+ /* -----------------------------------------------------------------------------
+  * ADV75xx helpers
+  */
++
+ static int adv7511_get_modes(struct adv7511 *adv7511,
+ 		struct drm_connector *connector)
+ {
+@@ -765,7 +774,6 @@ static int adv7511_get_modes(struct adv7511 *adv7511,
+ 	}
+ 
+ 	edid = drm_do_get_edid(connector, adv7511_get_edid_block, adv7511);
+-
+ 	if (!adv7511->powered)
+ 		regmap_update_bits(adv7511->regmap, ADV7511_REG_POWER,
+ 				   ADV7511_POWER_POWER_DOWN,
+@@ -775,7 +783,8 @@ static int adv7511_get_modes(struct adv7511 *adv7511,
+ 	adv7511->edid = edid;
+ 	if (!edid)
+ 		return 0;
+-
++	
++	printk("mfg_id 0x%x prod_code 0x%x width_cm %d height_cm %d  \n",edid->mfg_id,edid->prod_code,edid->width_cm,edid->height_cm);
+ 	drm_mode_connector_update_edid_property(connector, edid);
+ 	count = drm_add_edid_modes(connector, edid);
+ 
+@@ -783,13 +792,15 @@ static int adv7511_get_modes(struct adv7511 *adv7511,
+ 
+ 	return count;
+ }
+-
++int test_count=0;
+ static enum drm_connector_status
+ adv7511_detect(struct adv7511 *adv7511,
+ 		       struct drm_connector *connector)
+ {
+ 	enum drm_connector_status status;
+ 	unsigned int val;
++	dump_stack();
++	printk("hxy adv7511_detect!!!!!!!!!!!!!");
+ #if HPD_ENABLE
+ 	bool hpd;
+ #endif
+@@ -804,6 +815,9 @@ adv7511_detect(struct adv7511 *adv7511,
+ 	else
+ 		status = connector_status_disconnected;
+ 
++
++	printk("hxy adv7511_detect!!!!!!!!!!!!!status :%d connected is %d \n",status,connector_status_connected);
++
+ #if HPD_ENABLE
+ 	hpd = adv7511_hpd(adv7511);
+ 
+@@ -811,17 +825,34 @@ adv7511_detect(struct adv7511 *adv7511,
+ 	 * there is a pending HPD interrupt and the cable is connected there was
+ 	 * at least one transition from disconnected to connected and the chip
+ 	 * has to be reinitialized. */
+-	if (status == connector_status_connected && hpd && adv7511->powered) {
++	if(hpd)
++		printk("hxy hpd is ok!");
++
++	if(adv7511->powered)
++		printk("hxy adv7511 powered ok!");
++	else 
++		printk("hxy adv7511 powered is not ok!!!");
++
++	if (status != connector_status_connected) {
++		printk("status is not ok!"); 
++	}
++	else {
++		printk("status is ok!!!");
++	}
++	
++	if (status == connector_status_connected && hpd  && adv7511->powered) {
+ 		regcache_mark_dirty(adv7511->regmap);
+ 		adv7511_power_on(adv7511);
+ 		adv7511_get_modes(adv7511, connector);
+ 		if (adv7511->status == connector_status_connected)
+ 			status = connector_status_disconnected;
+ 	} else {
++	         printk("hxy Renable HDP sensing!");
+ 		/* Renable HDP sensing */
+ 		regmap_update_bits(adv7511->regmap, ADV7511_REG_POWER2,
+ 				   ADV7511_REG_POWER2_HDP_SRC_MASK,
+ 				   ADV7511_REG_POWER2_HDP_SRC_BOTH);
++	//	status = connector_status_disconnected;
+ 	}
+ #endif
+ 
+@@ -861,7 +892,7 @@ static void adv7511_mode_set(struct adv7511 *adv7511,
+ 	unsigned int low_refresh_rate;
+ 	unsigned int hsync_polarity = 0;
+ 	unsigned int vsync_polarity = 0;
+-
++      printk("hxy adv7511_mode_set!\n");
+ 	if (adv7511->embedded_sync) {
+ 		unsigned int hsync_offset, hsync_len;
+ 		unsigned int vsync_offset, vsync_len;
+@@ -978,6 +1009,7 @@ static int adv7511_encoder_get_modes(struct drm_encoder *encoder,
+ 			     struct drm_connector *connector)
+ {
+ 	struct adv7511 *adv7511 = encoder_to_adv7511(encoder);
++      printk("hxy adv7511_encoder_get_modes!\n");
+ 
+ 	return adv7511_get_modes(adv7511, connector);
+ }
+@@ -997,6 +1029,7 @@ adv7511_encoder_detect(struct drm_encoder *encoder,
+ 		       struct drm_connector *connector)
+ {
+ 	struct adv7511 *adv7511 = encoder_to_adv7511(encoder);
++      printk("hxy adv7511_encoder_detect!\n");
+ 
+ 	return adv7511_detect(adv7511, connector);
+ }
+@@ -1009,6 +1042,18 @@ static int adv7511_encoder_mode_valid(struct drm_encoder *encoder,
+ 	return adv7511_mode_valid(adv7511, mode);
+ }
+ 
++struct adv7511  * adv_g=NULL;
++void power_on_from_encoder(struct drm_encoder *encoder)
++{
++	//struct adv7511 *adv7511 = encoder_to_adv7511(encoder);
++	//if (mode == DRM_MODE_DPMS_ON)
++		//if(adv_g)
++		//	adv7511_irq_process(adv_g, true);
++		//adv7511_power_on(adv_g);
++	//else
++	//	adv7511_power_off(adv7511);
++}
++
+ static void adv7511_encoder_mode_set(struct drm_encoder *encoder,
+ 				     struct drm_display_mode *mode,
+ 				     struct drm_display_mode *adj_mode)
+@@ -1039,7 +1084,7 @@ static struct adv7511 *connector_to_adv7511(struct drm_connector *connector)
+ static int adv7533_connector_get_modes(struct drm_connector *connector)
+ {
+ 	struct adv7511 *adv = connector_to_adv7511(connector);
+-
++	printk("hxy adv7533_connector_get_modes!\n");
+ 	return adv7511_get_modes(adv, connector);
+ }
+ 
+@@ -1048,6 +1093,8 @@ adv7533_connector_best_encoder(struct drm_connector *connector)
+ {
+ 	struct adv7511 *adv = connector_to_adv7511(connector);
+ 
++       printk(" hxy adv7533_connector_best_encoder encoder->name %s  name 2 :%s\n",adv->encoder->name,adv->bridge.encoder->name);
++
+ 	return adv->bridge.encoder;
+ }
+ 
+@@ -1056,6 +1103,7 @@ adv7533_connector_mode_valid(struct drm_connector *connector,
+ 				struct drm_display_mode *mode)
+ {
+ 	struct adv7511 *adv = connector_to_adv7511(connector);
++      printk("hxy adv7533_connector_mode_valid!\n");
+ 
+ 	return adv7511_mode_valid(adv, mode);
+ }
+@@ -1070,7 +1118,8 @@ static enum drm_connector_status
+ adv7533_connector_detect(struct drm_connector *connector, bool force)
+ {
+ 	struct adv7511 *adv = connector_to_adv7511(connector);
+-
++      printk("hxy adv7533_connector_detect!\n");
++	adv_g = adv;
+ 	return adv7511_detect(adv, connector);
+ }
+ 
+@@ -1100,13 +1149,14 @@ static void adv7533_bridge_pre_enable(struct drm_bridge *bridge)
+ static void adv7533_bridge_post_disable(struct drm_bridge *bridge)
+ {
+ 	struct adv7511 *adv = bridge_to_adv7511(bridge);
++	printk("hxy adv7533_bridge_post_disable!!\n" );
+ 
+ #if HPD_ENABLE
+ 	if (!adv->powered)
+ 		return;
+ #endif
+-
+-	adv7511_power_off(adv);
++dump_stack();
++     adv7511_power_off(adv);
+ }
+ 
+ static void adv7533_bridge_enable(struct drm_bridge *bridge)
+@@ -1122,7 +1172,7 @@ static void adv7533_bridge_mode_set(struct drm_bridge *bridge,
+ 				     struct drm_display_mode *adj_mode)
+ {
+ 	struct adv7511 *adv = bridge_to_adv7511(bridge);
+-
++       printk("hxy adv7533_bridge_mode_set \n");
+ 	adv7511_mode_set(adv, mode, adj_mode);
+ }
+ 
+@@ -1177,7 +1227,7 @@ static int adv7533_bridge_attach(struct drm_bridge *bridge)
+ 	int ret;
+ 
+ 	adv->encoder = bridge->encoder;
+-
++       printk(" hxy adv7533_bridge_attach encoder->name %s\n",adv->encoder->name);
+ 	if (!bridge->encoder) {
+ 		DRM_ERROR("Parent encoder object not found");
+ 		return -ENODEV;
+@@ -1560,6 +1610,8 @@ static int adv7511_probe(struct i2c_client *i2c, const struct i2c_device_id *id)
+ 		if (ret) {
+ 			dev_err(dev, "failed to add adv7533 bridge\n");
+ 			goto err_i2c_unregister_cec;
++		} else {
++			printk("hxy  drm_bridge_add !\n");
+ 		}
+ 	}
+ #ifdef CONFIG_HDMI_ADV7511_AUDIO
+@@ -1609,7 +1661,7 @@ static int adv7511_encoder_init(struct i2c_client *i2c, struct drm_device *dev,
+ 	encoder->slave_funcs = &adv7511_encoder_funcs;
+ 
+ 	adv7511->encoder = &encoder->base;
+-
++	printk("hxy adv7511_encoder_init name %s \n",adv7511->encoder->name);
+ 	return 0;
+ }
+ 
+diff --git a/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_dpe_utils.c b/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_dpe_utils.c
+index 739b3bd..46233662 100755
+--- a/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_dpe_utils.c
++++ b/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_dpe_utils.c
+@@ -1004,6 +1004,7 @@ int dpe_regulator_enable(struct dss_hw_ctx *ctx)
+ 
+ int dpe_set_clk_rate(struct dss_hw_ctx *ctx)
+ {
++	struct dss_clk_rate pdss_clk_rate_m;
+ 	struct dss_clk_rate *pdss_clk_rate = NULL;
+ 	uint64_t dss_pri_clk_rate;
+ 	uint64_t dss_mmbuf_rate;
+@@ -1015,11 +1016,18 @@ int dpe_set_clk_rate(struct dss_hw_ctx *ctx)
+ 		return -EINVAL;
+ 	}
+ 
+-	pdss_clk_rate = get_dss_clk_rate(ctx);
+-	if (NULL == pdss_clk_rate) {
+-		DRM_ERROR("NULL Pointer!\n");
+-		return -EINVAL;
+-	}
++	pdss_clk_rate = &pdss_clk_rate_m;//get_dss_clk_rate(ctx);
++	
++//	if (NULL == pdss_clk_rate) {
++//		DRM_ERROR("NULL Pointer!\n");
++//		return -EINVAL;
++//	}
++
++
++	pdss_clk_rate->dss_pri_clk_rate = DEFAULT_DSS_CORE_CLK_RATE_L1;
++	pdss_clk_rate->dss_mmbuf_rate = DEFAULT_DSS_MMBUF_CLK_RATE_L1;
++	pdss_clk_rate->dss_pclk_dss_rate = DEFAULT_PCLK_DSS_RATE;
++	pdss_clk_rate->dss_pclk_pctrl_rate = DEFAULT_PCLK_PCTRL_RATE;
+ 
+ 	dss_pri_clk_rate = pdss_clk_rate->dss_pri_clk_rate;
+ 	ret = clk_set_rate(ctx->dss_pri_clk, dss_pri_clk_rate);
+diff --git a/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_dpe_utils.h b/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_dpe_utils.h
+index 6388906..810caab 100644
+--- a/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_dpe_utils.h
++++ b/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_dpe_utils.h
+@@ -21,7 +21,7 @@
+ #endif
+ #include "kirin_drm_drv.h"
+ 
+-/*#define CONFIG_HISI_FB_OV_BASE_USED*/
++//#define CONFIG_HISI_FB_OV_BASE_USED
+ /*#define CONFIG_HISI_FB_DPP_COLORBAR_USED*/
+ /*#define CONFIG_HISI_FB_LDI_COLORBAR_USED*/
+ 
+diff --git a/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_drv.c b/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_drv.c
+index 4ae411b..e621bb0 100755
+--- a/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_drv.c
++++ b/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_drv.c
+@@ -25,9 +25,17 @@
+ #include <drm/drm_crtc_helper.h>
+ 
+ #include "kirin_drm_drv.h"
++#define CMA_POOL
++#ifdef CMA_POOL
++#include <linux/of_reserved_mem.h>
++#endif
+ 
+ #ifdef CONFIG_DRM_FBDEV_EMULATION
++#ifdef CMA_POOL
++static bool fbdev = false;
++#else
+ static bool fbdev = true;
++#endif
+ MODULE_PARM_DESC(fbdev, "Enable fbdev compat layer");
+ module_param(fbdev, bool, 0600);
+ #endif
+@@ -59,13 +67,14 @@ static void kirin_fbdev_output_poll_changed(struct drm_device *dev)
+ 	struct kirin_drm_private *priv = dev->dev_private;
+ 
+ 	dsi_set_output_client(dev);
+-
++	printk("hxy  kirin_fbdev_output_poll_changed!!!!");
+ #ifdef CMA_BUFFER_USED
+ 	if (priv->fbdev) {
+-		DRM_INFO("hotplug_event!!!!!!\n");
++		DRM_INFO("hxy cma hotplug_event!!!!!!\n");
+ 		drm_fbdev_cma_hotplug_event(priv->fbdev);
+-	} else {
+-		DRM_INFO("cma_init!!!!!!\n");
++	} else
++         {
++		DRM_INFO("hxy cma_init!!!!!!\n");
+ 		priv->fbdev = drm_fbdev_cma_init(dev, 32,
+ 				dev->mode_config.num_crtc,
+ 				dev->mode_config.num_connector);
+@@ -97,12 +106,11 @@ static void kirin_drm_mode_config_init(struct drm_device *dev)
+ 
+ 	dev->mode_config.funcs = &kirin_drm_mode_config_funcs;
+ }
+-
+ static int kirin_drm_kms_init(struct drm_device *dev)
+ {
+ 	struct kirin_drm_private *priv;
+ 	int ret;
+-
++	printk("hxy kirin_drm_kms_init!!!\n");
+ 	priv = devm_kzalloc(dev->dev, sizeof(*priv), GFP_KERNEL);
+ 	if (!priv)
+ 		return -ENOMEM;
+@@ -140,6 +148,9 @@ static int kirin_drm_kms_init(struct drm_device *dev)
+ 
+ 	if (fbdev)
+ 		priv->fbdev = kirin_drm_fbdev_init(dev);
++	else {
++		priv->fbdev = drm_fbdev_cma_init(dev,32,1,1);
++	}
+ 
+ 	/* init kms poll for handling hpd */
+ 	drm_kms_helper_poll_init(dev);
+@@ -261,7 +272,7 @@ static int kirin_drm_bind(struct device *dev)
+ 	struct drm_driver *driver = &kirin_drm_driver;
+ 	struct drm_device *drm_dev;
+ 	int ret;
+-
++	printk("hxy kirin_drm_bind!!!!\n");
+ 	//drm_platform_init(&kirin_drm_driver, to_platform_device(dev));
+ 
+ 	drm_dev = drm_dev_alloc(driver, dev);
+@@ -344,7 +355,7 @@ static int kirin_drm_platform_probe(struct platform_device *pdev)
+ 	struct device_node *np = dev->of_node;
+ 	struct component_match *match = NULL;
+ 	struct device_node *remote;
+-
++       int ret = 0;
+ 	dc_ops = (struct kirin_dc_ops *)of_device_get_match_data(dev);
+ 	if (!dc_ops) {
+ 		DRM_ERROR("failed to get dt id data\n");
+@@ -359,14 +370,22 @@ static int kirin_drm_platform_probe(struct platform_device *pdev)
+ 	DRM_INFO("the device remote node is %s\n", remote->name);
+ 
+ 	component_match_add(dev, &match, compare_of, remote);
++#ifdef CMA_POOL
++	ret = of_reserved_mem_device_init(dev);
+ 
++	if (ret)
++		printk("cma device init failed!");
++#endif	
+ 	return component_master_add_with_match(dev, &kirin_drm_ops, match);
+ 
+-	return 0;
+ }
+ 
+ static int kirin_drm_platform_remove(struct platform_device *pdev)
+ {
++ struct device *dev = &pdev->dev;
++#ifdef CMA_POOL
++	of_reserved_mem_device_release(dev);
++#endif
+ 	component_master_del(&pdev->dev, &kirin_drm_ops);
+ 	dc_ops = NULL;
+ 	return 0;
+diff --git a/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_drv.h b/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_drv.h
+index 3aee36a..3b00284 100644
+--- a/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_drv.h
++++ b/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_drv.h
+@@ -22,7 +22,7 @@
+ 
+ #define MAX_CRTC	2
+ 
+-//#define CMA_BUFFER_USED
++#define CMA_BUFFER_USED
+ #define to_kirin_fbdev(x) container_of(x, struct kirin_fbdev, fb_helper)
+ 
+ /* display controller init/cleanup ops */
+@@ -33,7 +33,11 @@ struct kirin_dc_ops {
+ 
+ struct kirin_drm_private {
+ 	struct drm_fb_helper *fb_helper;
++#ifdef CMA_BUFFER_USED
++	struct drm_fbdev_cma *fbdev;
++#else
+ 	struct drm_fb_helper *fbdev;
++#endif	
+ 	struct drm_crtc *crtc[MAX_CRTC];
+ };
+ 
+diff --git a/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_dss.c b/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_dss.c
+index 27b1630..111252c 100755
+--- a/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_dss.c
++++ b/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_dss.c
+@@ -622,6 +622,7 @@ static int dss_plane_atomic_check(struct drm_plane *plane,
+ static void dss_plane_atomic_update(struct drm_plane *plane,
+ 				    struct drm_plane_state *old_state)
+ {
++	dump_stack();
+ 	hisi_fb_pan_display(plane);
+ }
+ 
+@@ -908,6 +909,8 @@ static int dss_drm_init(struct drm_device *dev)
+ 	/* vblank irq init */
+ 	ret = devm_request_irq(dev->dev, ctx->irq, dss_irq_handler,
+ 			       IRQF_SHARED, dev->driver->name, acrtc);
++
++	printk("hxy req dss irq :%s \n",dev->driver->name);
+ 	if (ret) {
+ 		DRM_ERROR("fail to  devm_request_irq, ret=%d!", ret);
+ 		return ret;
+diff --git a/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_overlay_utils.c b/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_overlay_utils.c
+index 3023620..ea74090 100755
+--- a/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_overlay_utils.c
++++ b/drivers/gpu/drm/hisilicon/kirin960/kirin_drm_overlay_utils.c
+@@ -994,7 +994,6 @@ static int hisi_dss_mctl_sys_config(struct dss_hw_ctx *ctx, int chn_idx)
+ 	mctl_sys_base = ctx->base + DSS_MCTRL_SYS_OFFSET;
+ 	mctl_rch_ov_oen_offset = MCTL_RCH0_OV_OEN + chn_idx * 0x4;
+ 	mctl_rch_flush_en_offset = MCTL_RCH0_FLUSH_EN + chn_idx * 0x4;
+-
+ 	set_reg(mctl_sys_base + mctl_rch_ov_oen_offset,
+ 		((1 << (layer_idx + 1)) | (0x100 << DSS_OVL0)), 32, 0);
+ 
+@@ -1007,8 +1006,9 @@ static int hisi_dss_mctl_sys_config(struct dss_hw_ctx *ctx, int chn_idx)
+ 	set_reg(mctl_sys_base + MCTL_RCH_OV0_SEL, chn_idx, 4, (layer_idx + 1) * 4);
+ 
+ 	set_reg(mctl_sys_base + MCTL_OV0_FLUSH_EN, 0xd, 4, 0);
++#if 1	
+ 	set_reg(mctl_sys_base + mctl_rch_flush_en_offset, 0x1, 32, 0);
+-
++#endif
+ 	return 0;
+ }
+ 
+@@ -1404,6 +1404,7 @@ void hisi_dss_smmu_on(struct dss_hw_ctx *ctx)
+ 
+ void hisifb_dss_on(struct dss_hw_ctx *ctx)
+ {
++	printk("hisifb_dss_on!!");
+ 	/* dss qos on*/
+ 	hisi_dss_qos_on(ctx);
+ 	/* mif on*/
+@@ -1482,7 +1483,7 @@ static int hisi_dss_wait_for_complete(struct dss_hw_ctx *ctx)
+ 
+ 	return ret;
+ }
+-
++extern unsigned long smem_start_G;
+ void hisi_fb_pan_display(struct drm_plane *plane)
+ {
+ 	struct drm_plane_state *state = plane->state;
+@@ -1528,9 +1529,9 @@ void hisi_fb_pan_display(struct drm_plane *plane)
+ 	bpp = fb->bits_per_pixel / 8;
+ 	stride = fb->pitches[0];
+ 
+-#if defined(CONFIG_HISI_FB_LDI_COLORBAR_USED) || defined(CONFIG_HISI_FB_DPP_COLORBAR_USED) || defined(CONFIG_HISI_FB_OV_BASE_USED)
+-	return;
+-#endif
++//#if defined(CONFIG_HISI_FB_LDI_COLORBAR_USED) || defined(CONFIG_HISI_FB_DPP_COLORBAR_USED) || defined(CONFIG_HISI_FB_OV_BASE_USED)
++//	return;
++//#endif
+ 
+ #ifndef CMA_BUFFER_USED
+ 	if (fbdev)
+@@ -1538,7 +1539,14 @@ void hisi_fb_pan_display(struct drm_plane *plane)
+ 	else
+ 		DRM_ERROR("fbdev is null? \n");
+ #else
+-	display_addr = (u32)obj->paddr + src_y * stride;
++        if(obj) {
++		display_addr = (u32)obj->paddr + src_y * stride;
++		printk("hxy display_addr is 0x%x \n",display_addr);
++	}
++	else {
++			DRM_ERROR("hxy obj is null? \n");
++			return;
++		}
+ #endif
+ 
+ 	rect.left = 0;
+@@ -1547,7 +1555,7 @@ void hisi_fb_pan_display(struct drm_plane *plane)
+ 	rect.bottom = src_h - 1;
+ 	hal_fmt = HISI_FB_PIXEL_FORMAT_BGRA_8888;//dss_get_format(fb->pixel_format);
+ 
+-	DRM_DEBUG("channel%d: src:(%d,%d, %dx%d) crtc:(%d,%d, %dx%d), rect(%d,%d,%d,%d),"
++	DRM_DEBUG("hxy channel%d: src:(%d,%d, %dx%d) crtc:(%d,%d, %dx%d), rect(%d,%d,%d,%d),"
+ 		"fb:%dx%d, pixel_format=%d, stride=%d, paddr=0x%x, bpp=%d, bits_per_pixel=%d.\n",
+ 		chn_idx, src_x, src_y, src_w, src_h,
+ 		crtc_x, crtc_y, crtc_w, crtc_h,
+@@ -1569,10 +1577,10 @@ void hisi_fb_pan_display(struct drm_plane *plane)
+ 
+ 	hisi_dss_rdma_config(ctx, &rect, display_addr, hal_fmt, bpp, chn_idx, afbcd, mmu_enable);
+ 	hisi_dss_rdfc_config(ctx, &rect, hal_fmt, bpp, chn_idx);
+-	hisi_dss_ovl_config(ctx, &rect, mode->hdisplay, mode->vdisplay);
++       hisi_dss_ovl_config(ctx, &rect, mode->hdisplay, mode->vdisplay);
+ 
+ 	hisi_dss_mctl_ov_config(ctx, chn_idx);
+-	hisi_dss_mctl_sys_config(ctx, chn_idx);
++	hisi_dss_mctl_sys_config(ctx, chn_idx);/* */
+ 	hisi_dss_mctl_mutex_unlock(ctx);
+ 	hisi_dss_unflow_handler(ctx, true);
+ 
+diff --git a/drivers/gpu/drm/hisilicon/kirin960/kirin_fbdev.c b/drivers/gpu/drm/hisilicon/kirin960/kirin_fbdev.c
+index 08b098b..72e4e08 100755
+--- a/drivers/gpu/drm/hisilicon/kirin960/kirin_fbdev.c
++++ b/drivers/gpu/drm/hisilicon/kirin960/kirin_fbdev.c
+@@ -58,7 +58,7 @@ unsigned long kirin_alloc_fb_buffer(struct kirin_fbdev *fbdev, int size)
+ 	size_t buf_len = 0;
+ 	unsigned long buf_addr = 0;
+ 	int shared_fd = -1;
+-
++	printk("hxy kirin_alloc_fb_buffer!");
+ 	if (NULL == fbdev) {
+ 		DRM_ERROR("fbdev is NULL!\n");
+ 		return -EINVAL;
+@@ -327,7 +327,7 @@ static int kirin_fbdev_create(struct drm_fb_helper *helper,
+ 	struct drm_mode_fb_cmd2 mode_cmd = {0};
+ 	int ret, size;
+ 	unsigned int bytes_per_pixel;
+-
++	printk("kirin_fbdev_create");
+ 	DRM_DEBUG("create fbdev: %dx%d@%d (%dx%d)\n", sizes->surface_width,
+ 			sizes->surface_height, sizes->surface_bpp,
+ 			sizes->fb_width, sizes->fb_height);
+diff --git a/drivers/video/console/fbcon.c b/drivers/video/console/fbcon.c
+index 4db10d7..ed6573c 100644
+--- a/drivers/video/console/fbcon.c
++++ b/drivers/video/console/fbcon.c
+@@ -3259,6 +3259,8 @@ static void fbcon_get_requirement(struct fb_info *info,
+ 	}
+ }
+ 
++extern int waiting_for_hdmi_connect;
++
+ static int fbcon_event_notify(struct notifier_block *self,
+ 			      unsigned long action, void *data)
+ {
+@@ -3269,6 +3271,16 @@ static int fbcon_event_notify(struct notifier_block *self,
+ 	struct fb_blit_caps *caps;
+ 	int idx, ret = 0;
+ 
++
++     if(waiting_for_hdmi_connect)
++	{
++		//msleep(1000);
++		printk("hxy fbcon_event_notify waiting_for_hdmi_connect,return!cation 0x%x \n",action);
++	//	return 0;
++	} else {
++		printk("hxy fbcon_event_notify ,!cation 0x%x \n",action);
++	}
++
+ 	/*
+ 	 * ignore all events except driver registration and deregistration
+ 	 * if fbcon is not active
+diff --git a/drivers/video/fbdev/core/fbmem.c b/drivers/video/fbdev/core/fbmem.c
+index 76c1ad9..40b33dd 100644
+--- a/drivers/video/fbdev/core/fbmem.c
++++ b/drivers/video/fbdev/core/fbmem.c
+@@ -817,6 +817,7 @@ fb_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos)
+ 	u8 __iomem *dst;
+ 	int c, cnt = 0, err = 0;
+ 	unsigned long total_size;
++	printk("hxy fb_write in !!!\n");
+ 
+ 	if (!info || !info->screen_base)
+ 		return -ENODEV;
+@@ -853,7 +854,7 @@ fb_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos)
+ 		return -ENOMEM;
+ 
+ 	dst = (u8 __iomem *) (info->screen_base + p);
+-
++	printk("hxy fb_write screen_base =0x%x \n",info->screen_base);
+ 	if (info->fbops->fb_sync)
+ 		info->fbops->fb_sync(info);
+ 
+@@ -876,6 +877,7 @@ fb_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos)
+ 	}
+ 
+ 	kfree(buffer);
++	printk("hxy fb_write out !!!ret %d \n",(cnt) ? cnt : err);
+ 
+ 	return (cnt) ? cnt : err;
+ }
+@@ -1227,6 +1229,7 @@ static long do_fb_ioctl(struct fb_info *info, unsigned int cmd,
+ static long fb_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+ {
+ 	struct fb_info *info = file_fb_info(file);
++	printk("hxy fb_ioctl in !!!\n");
+ 
+ 	if (!info)
+ 		return -ENODEV;
+@@ -1355,6 +1358,7 @@ static long fb_compat_ioctl(struct file *file, unsigned int cmd,
+ 	struct fb_info *info = file_fb_info(file);
+ 	struct fb_ops *fb;
+ 	long ret = -ENOIOCTLCMD;
++	printk("hxy fb_compat_ioctl in !!!");
+ 
+ 	if (!info)
+ 		return -ENODEV;
+@@ -1384,6 +1388,9 @@ static long fb_compat_ioctl(struct file *file, unsigned int cmd,
+ 			ret = fb->fb_compat_ioctl(info, cmd, arg);
+ 		break;
+ 	}
++
++	printk("hxy fb_compat_ioctl out !!!%ld \n",ret);
++	
+ 	return ret;
+ }
+ #endif
+@@ -1395,18 +1402,28 @@ fb_mmap(struct file *file, struct vm_area_struct * vma)
+ 	struct fb_ops *fb;
+ 	unsigned long mmio_pgoff;
+ 	unsigned long start;
++	int ret=0;
+ 	u32 len;
++	printk("hxy fb_mmap in !!!\n");
++
++	if (!info) {
++	printk("hxy fb_mmap err1 !!!\n");
+ 
+-	if (!info)
+ 		return -ENODEV;
++	}
+ 	fb = info->fbops;
+-	if (!fb)
++	if (!fb){
++	printk("hxy fb_mmap err2 !!!\n");
++
+ 		return -ENODEV;
++	}
+ 	mutex_lock(&info->mm_lock);
+ 	if (fb->fb_mmap) {
+ 		int res;
+ 		res = fb->fb_mmap(info, vma);
+ 		mutex_unlock(&info->mm_lock);
++			printk("hxy fb_mmap out1 %d !!!\n",res);
++
+ 		return res;
+ 	}
+ 
+@@ -1420,6 +1437,8 @@ fb_mmap(struct file *file, struct vm_area_struct * vma)
+ 	if (vma->vm_pgoff >= mmio_pgoff) {
+ 		if (info->var.accel_flags) {
+ 			mutex_unlock(&info->mm_lock);
++			printk("hxy fb_mmap out2 -%d !!!\n",EINVAL);
++
+ 			return -EINVAL;
+ 		}
+ 
+@@ -1432,7 +1451,11 @@ fb_mmap(struct file *file, struct vm_area_struct * vma)
+ 	vma->vm_page_prot = vm_get_page_prot(vma->vm_flags);
+ 	fb_pgprotect(file, vma, start);
+ 
+-	return vm_iomap_memory(vma, start, len);
++	 ret =vm_iomap_memory(vma, start, len);
++
++	printk("hxy fb_mmap out3 %d !!!\n",ret);
++	return ret;
++
+ }
+ 
+ static int
+@@ -1443,6 +1466,7 @@ __releases(&info->lock)
+ 	int fbidx = iminor(inode);
+ 	struct fb_info *info;
+ 	int res = 0;
++	printk("hxy fb_open in %d !!!",fbidx);
+ 
+ 	info = get_fb_info(fbidx);
+ 	if (!info) {
+@@ -1473,6 +1497,8 @@ __releases(&info->lock)
+ 	mutex_unlock(&info->lock);
+ 	if (res)
+ 		put_fb_info(info);
++
++	printk("hxy fb_open out %d %d!!!",res,fbidx);	
+ 	return res;
+ }
+ 
+@@ -1482,6 +1508,7 @@ __acquires(&info->lock)
+ __releases(&info->lock)
+ {
+ 	struct fb_info * const info = file->private_data;
++	printk("hxy fb_release in !!!\n");
+ 
+ 	mutex_lock(&info->lock);
+ 	if (info->fbops->fb_release)
+@@ -1489,6 +1516,8 @@ __releases(&info->lock)
+ 	module_put(info->fbops->owner);
+ 	mutex_unlock(&info->lock);
+ 	put_fb_info(info);
++	printk("hxy fb_release out!!!\n");
++	
+ 	return 0;
+ }
+ 
+-- 
+2.7.4
+
